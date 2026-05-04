@@ -1,0 +1,869 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>GitHub Trend Tracker · 三种界面</title>
+  <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+  <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&family=Outfit:wght@300;500;700;900&family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet" />
+<style>
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+:root{--bg:#0a0a0f;--text:#e0e0e8}
+html{font-size:15px}
+body{background:var(--bg);color:var(--text);min-height:100vh;overflow-x:hidden;font-family:'Inter',sans-serif}
+#root{min-height:100vh}
+</style>
+</head>
+<body>
+<div id="root"></div>
+
+<script>
+// Electron detection
+const IS_ELECTRON = window.__ELECTRON__ === true || window.electronAPI?.isElectron === true;
+const IS_MAC = IS_ELECTRON && (window.electronAPI?.platform || navigator.platform).includes('darwin');
+</script>
+
+<script type="text/babel" data-type="module">
+const { useState, useEffect, useRef, useCallback, useMemo } = React;
+
+const API = '/api';
+
+const LANGUAGE_COLORS = {
+  Python:'#3572A5',TypeScript:'#3178C6',JavaScript:'#f7df1e',Rust:'#dea584',
+  Go:'#00ADD8',Java:'#b07219','C++':'#f34b7d',C:'#555',Ruby:'#701516',
+  Kotlin:'#a97bff',Swift:'#f05138',Vue:'#4fc08d',HTML:'#e34f26',CSS:'#563d7c',
+  Shell:'#89e051',Solidity:'#aaa',
+};
+
+// ===================================================================
+//  i18n — 中文 / English
+// ===================================================================
+const L = {
+  zh:{
+    sync:'同步',refresh:'刷新',search:'搜索',batch:'批量扫描',query:'查询',
+    clear:'清空',help:'帮助',loading:'加载中...',scanning:'扫描中...',
+    noData:'暂无数据',enterTopic:'输入话题或运行批量扫描',
+    error:'错误',unknown:'未知命令',usage:'用法',noResults:'无结果',
+    trending:'热门',topics:'话题',report:'报告',
+    command:'命令',desc:'描述',lang:'语言',stars:'星标',
+    repos:'仓库',languages:'语言',starsToday:'今日星标',forks:'分支',
+    days:'天',today:'今日',daily:'每日',weekly:'每周',monthly:'每月',
+    uptime:'运行时间',pid:'进程',mem:'内存',badge:'终端 v2.0',
+    sustained:'持续上榜',daysTracked:'追踪天数',uniqueRepos:'独立仓库',
+    topSustained:'最多持续上榜',
+    cli:{
+      welcome:'输入 "help" 查看可用命令',
+      found:'找到',repos:'个仓库',fetching:'获取中...',
+      scanned:'扫描完成',generating:'生成报告...',
+      tip:'提示：使用 ↑↓ 浏览命令历史',
+      cmds:{
+        commands:'命令',trending:'获取热门仓库',topic:'按话题搜索仓库',batch:'扫描所有热门话题',
+        report:'生成趋势报告',lang:'按语言过滤热门',clear:'清空终端',help:'显示帮助',
+      }
+    },
+    el:{
+      title:'GitHub 趋势追踪',logo:'追踪器',subtitle:'GitHub 雷达',
+      loading:'加载中...',noData:'暂无数据',enterTopic:'输入话题或运行批量扫描',
+    }
+  },
+  en:{
+    sync:'sync',refresh:'Refresh',search:'Search',batch:'Batch Scan',query:'Query',
+    clear:'Clear',help:'Help',loading:'Loading...',scanning:'Scanning...',
+    noData:'No data',enterTopic:'Enter topic or batch scan',
+    error:'Error',unknown:'unknown command',usage:'usage',noResults:'no results',
+    trending:'Trending',topics:'Topics',report:'Report',
+    command:'Command',desc:'Description',lang:'Language',stars:'Stars',
+    repos:'Repos',languages:'Languages',starsToday:'Stars Today',forks:'Forks',
+    days:'days',today:'today',daily:'Daily',weekly:'Weekly',monthly:'Monthly',
+    uptime:'uptime',pid:'PID',mem:'MEM',badge:'TUI v2.0',
+    sustained:'Top Sustained',daysTracked:'Days Tracked',uniqueRepos:'Unique Repos',
+    topSustained:'Top Sustained',
+    cli:{
+      welcome:'Type "help" for available commands',
+      found:'found',repos:'repos',fetching:'fetching...',
+      scanned:'scanned',generating:'generating report...',
+      tip:'TIP: use ↑↓ for command history',
+      cmds:{
+        trending:'Fetch trending repos',topic:'Search repos by topic',
+        batch:'Scan all popular topics',report:'Generate trend report',
+        lang:'Filter trending by language',clear:'Clear terminal',help:'Show this help',
+      }
+    },
+    el:{
+      title:'GitHub Trend Tracker',logo:'TRACKER',subtitle:'GitHub Radar',
+      loading:'Loading...',noData:'No data available',enterTopic:'Enter topic or batch scan',
+    }
+  }
+};
+
+function tr(key, lang) {
+  return key.split('.').reduce((o, k) => (o && o[k] !== undefined ? o[k] : key), L[lang]) || key;
+}
+function useI18n(){
+  const [lang,setL]=useState(()=>localStorage.getItem('gt-lang')||'zh');
+  useEffect(()=>localStorage.setItem('gt-lang',lang),[lang]);
+  const t=useCallback((k)=>tr(k,lang),[lang]);
+  return {t,lang,setLang:setL};
+}
+
+// ===================================================================
+//  MODE SWITCHER (shared across all modes)
+// ===================================================================
+const MODES = [
+  { id:'cli', label:'CLI',    icon:'>_',  color:'#00ff41', desc:'命令行终端' },
+  { id:'tui', label:'TUI',    icon:'◇',  color:'#ff79c6', desc:'仪表盘终端' },
+  { id:'el',  label:'ELECTRON',icon:'●', color:'#8be9fd', desc:'桌面应用风格' },
+];
+
+function ModeSwitcher({mode,onMode,onRefresh,lang,setLang}){
+  return (
+    <div style={{
+      position:'fixed',top:0,left:0,right:0,zIndex:99999,
+      display:'flex',justifyContent:'center',alignItems:'center',gap:0,gap:'0px',
+      background:'rgba(0,0,0,.88)',backdropFilter:'blur(18px)',
+      borderBottom:'1px solid rgba(255,255,255,.06)',
+      padding:'5px 12px',fontFamily:'Inter,sans-serif',
+    }}>
+      {MODES.map((m,i)=>(
+        <React.Fragment key={m.id}>
+          {i>0&&<div style={{width:1,height:18,background:'rgba(255,255,255,.06)',margin:'0 6px'}}/>}
+          <button onClick={()=>onMode(m.id)}
+            style={{
+              background:mode===m.id?`${m.color}12`:'transparent',
+              border:`1px solid ${mode===m.id?m.color+'40':'transparent'}`,
+              color:mode===m.id?m.color:'rgba(255,255,255,.35)',
+              padding:'5px 16px',borderRadius:4,cursor:'pointer',
+              fontSize:'10px',fontWeight:600,letterSpacing:'1px',
+              textTransform:'uppercase',transition:'all .2s',
+              display:'flex',alignItems:'center',gap:6,
+              fontFamily:'inherit',
+            }}
+            onMouseEnter={e=>{if(mode!==m.id)e.target.style.color='rgba(255,255,255,.6)'}}
+            onMouseLeave={e=>{if(mode!==m.id)e.target.style.color='rgba(255,255,255,.35)'}}
+          >
+            <span style={{fontSize:12}}>{m.icon}</span>
+            {m.label}
+          </button>
+        </React.Fragment>
+      ))}
+      <div style={{flex:1}}/>
+      <button onClick={onRefresh}
+        style={{
+          background:'rgba(255,255,255,.04)',border:'1px solid rgba(255,255,255,.08)',
+          color:'rgba(255,255,255,.3)',padding:'4px 10px',borderRadius:4,cursor:'pointer',
+          fontSize:'9px',transition:'all .2s',fontFamily:'inherit',marginRight:8,
+        }}
+        onMouseEnter={e=>{e.target.style.color='#fff';e.target.style.background='rgba(255,255,255,.08)'}}
+        onMouseLeave={e=>{e.target.style.color='rgba(255,255,255,.3)';e.target.style.background='rgba(255,255,255,.04)'}}
+      >⟳ {tr('sync',lang)}</button>
+      <button onClick={()=>setLang(lang==='zh'?'en':'zh')}
+        style={{
+          background:'rgba(255,255,255,.04)',border:'1px solid rgba(255,255,255,.08)',
+          color:'rgba(255,255,255,.4)',padding:'4px 8px',borderRadius:4,cursor:'pointer',
+          fontSize:'10px',fontWeight:600,transition:'all .2s',fontFamily:'inherit',
+          minWidth:32,textAlign:'center',
+        }}
+        onMouseEnter={e=>{e.target.style.color='#fff';e.target.style.borderColor='rgba(255,255,255,.2)'}}
+        onMouseLeave={e=>{e.target.style.color='rgba(255,255,255,.4)';e.target.style.borderColor='rgba(255,255,255,.08)'}}
+      >{lang==='zh'?'EN':'中'}</button>
+    </div>
+  );
+}
+
+// ===================================================================
+//  MODE 1: CLI — 完全的命令行模拟器
+// ===================================================================
+const cliStyles = `
+.cli-root{background:#0d0d0d;min-height:100vh;font-family:'JetBrains Mono',monospace;
+  display:flex;flex-direction:column;color:#e0e0e0;padding-top:40px;}
+.cli-output{flex:1;overflow-y:auto;padding:12px 16px 4px;scroll-behavior:smooth;}
+.cli-line{font-size:12px;line-height:1.5;white-space:pre-wrap;word-break:break-all;padding:0 4px;}
+.cli-line.green{color:#00ff41}
+.cli-line.dim{color:#00ff4160}
+.cli-line.red{color:#ff5555}
+.cli-line.yellow{color:#f1fa8c}
+.cli-line.pink{color:#ff79c6}
+.cli-line.cyan{color:#8be9fd}
+.cli-line.white{color:#f8f8f2}
+.cli-line.gray{color:#6272a4}
+.cli-line.bold{font-weight:700}
+.cli-line-sep{height:1px;background:#00ff4115;margin:6px 0;}
+.cli-input-line{display:flex;align-items:center;padding:4px 16px 12px;gap:2px;font-size:13px;}
+.cli-prompt{color:#00ff41;white-space:pre;}
+.cli-prompt-path{color:#00ff4180;font-size:10px;margin-right:8px;}
+.cli-input{flex:1;background:transparent;border:none;color:#f8f8f2;font-family:'JetBrains Mono',monospace;
+  font-size:12px;outline:none;caret-color:#00ff41;}
+.cli-input::placeholder{color:#00ff4120}
+.cli-cursor-blink{animation:blinkCl 1s step-end infinite;display:inline-block;width:6px;height:14px;background:#00ff41;margin-left:2px;}
+@keyframes blinkCl{50%{opacity:0}}
+.cli-loading{text-align:center;padding:40px;color:#00ff4160;font-size:11px;}
+.cli-table{font-size:11px;line-height:1.5;width:100%;border-collapse:collapse;}
+.cli-table th{color:#00ff4160;font-weight:400;padding:3px 8px;text-align:left;border-bottom:1px solid #00ff4133;font-size:9px;text-transform:uppercase;letter-spacing:1px;}
+.cli-table td{padding:3px 8px;border-bottom:1px solid #00ff4108;vertical-align:top;}
+.cli-table .rn{color:#00ff4160;width:24px;text-align:right;}
+.cli-table .nm{color:#00ff41;font-weight:600;width:160px;}
+.cli-table .ds{color:#00ff4190;max-width:260px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.cli-table .ln{color:#6272a4;width:70px;}
+.cli-table .st{color:#f1fa8c;width:75px;text-align:right;}
+.cli-table .td{color:#ff79c6;width:55px;text-align:right;}
+.cli-help-grid{display:grid;grid-template-columns:1fr 1fr;gap:0 32px;padding:4px 0;}
+.cli-help-cmd{color:#00ff41;font-weight:600;}
+.cli-help-desc{color:#00ff4190;}
+`;
+
+function CliLine({children,cls=''}){
+  return <div className={'cli-line'+(cls?' '+cls:'')}>{children}</div>;
+}
+
+function CliTable({repos}){
+  return (
+    <table className="cli-table">
+      <thead><tr><th className="rn">#</th><th>REPOSITORY</th><th>DESCRIPTION</th><th>LANG</th><th>STARS</th><th>Δ</th></tr></thead>
+      <tbody>
+        {repos.map((r,i)=>(
+          <tr key={r.fullName||i}>
+            <td className="rn">{i+1}</td>
+            <td className="nm"><a href={r.url||'#'} target="_blank" style={{color:'#00ff41',textDecoration:'none'}}>{r.fullName}</a></td>
+            <td className="ds">{(r.description||'').slice(0,75)}</td>
+            <td className="ln">{r.language||'—'}</td>
+            <td className="st">{(r.totalStars||r.stars||0).toLocaleString()}</td>
+            <td className="td">{r.todayStars?'+'+r.todayStars:''}</td>
+          </tr>
+        ))}
+      </tbody>
+    </table>
+  );
+}
+
+function CliTopicsView({data}){
+  if(!data||data.length===0)return null;
+  return <div>{data.map(g=><div key={g.topic} style={{marginBottom:8}}>
+    <CliLine cls="green bold">▸ {g.topic} ({g.repos.length} repos)</CliLine>
+    {g.repos.slice(0,5).map(r=>
+      <CliLine key={r.fullName} cls="dim">
+        {'  '}★{r.stars?.toLocaleString()}  <a href={r.url} target="_blank" style={{color:'#00ff41',textDecoration:'none'}}>{r.fullName}</a>
+      </CliLine>
+    )}
+  </div>)}</div>;
+}
+
+function CliReportView({data}){
+  if(!data||data.message)return <CliLine cls="dim">{data?.message||'loading...'}</CliLine>;
+  return <>
+    <CliLine cls="dim">tracked: {data.trackedDays} days · unique repos: {data.uniqueRepos}</CliLine>
+    <div className="cli-line-sep"/>
+    <CliLine cls="green bold">TOP SUSTAINED REPOS</CliLine>
+    {data.topTrending?.slice(0,15).map((r,i)=>
+      <CliLine key={r.fullName}>
+        {'  '}{(i+1+'').padStart(2)}. <a href={r.url} target="_blank" style={{color:'#00ff41',textDecoration:'none'}}>{r.fullName}</a>
+        {'  '}{r.appearances}d  ★{r.totalStarsLatest?.toLocaleString()}  {r.language||'—'}
+      </CliLine>
+    )}
+  </>;
+}
+
+function CliMode({t, lang}){
+  const [lines,setLines]=useState([]);
+  const [input,setInput]=useState('');
+  const [loading,setLoading]=useState(null);
+  const [history,setHistory]=useState([]);
+  const [histIdx,setHistIdx]=useState(-1);
+  const inputRef=useRef(null);
+  const outRef=useRef(null);
+
+  const addLine=(text,cls='')=>setLines(p=>[...p,{text,cls}]);
+  const addLines=(arr)=>setLines(p=>[...p,...arr]);
+
+  useEffect(()=>{if(outRef.current)outRef.current.scrollTop=outRef.current.scrollHeight},[lines,loading]);
+
+  useEffect(()=>{
+    setLines([
+      {text:'╔══════════════════════════════════════════════╗',cls:'green'},
+      {text:'║     GITHUB TREND TRACKER  v2.0              ║',cls:'green'},
+      {text:'║     ' + t('cli.welcome').padEnd(42) + '║',cls:'green'},
+      {text:'╚══════════════════════════════════════════════╝',cls:'green'},
+      {text:'',cls:''},
+    ]);
+  },[lang]);
+
+  const execute=useCallback(async(cmdStr)=>{
+    const trimmed=cmdStr.trim();
+    if(!trimmed)return;
+    addLine(`❯ ${trimmed}`,'green bold');
+    setHistory(h=>[...h,trimmed]);
+    setHistIdx(-1);
+
+    const parts=trimmed.split(/\s+/);
+    const cmd=parts[0].toLowerCase();
+    const args=parts.slice(1);
+
+    if(cmd==='help'){
+      addLines([
+        {text:'',cls:''},
+        {text:'  ' + t('cli.cmds.commands'), cls:'green bold'},
+        {text:'',cls:''},
+        {text:'  trending [daily|weekly|monthly]   ' + t('cli.cmds.trending'), cls:'dim'},
+        {text:'  topic <name> [--min N]            ' + t('cli.cmds.topic'), cls:'dim'},
+        {text:'  batch                             ' + t('cli.cmds.batch'), cls:'dim'},
+        {text:'  report                            ' + t('cli.cmds.report'), cls:'dim'},
+        {text:'  lang <language>                   ' + t('cli.cmds.lang'), cls:'dim'},
+        {text:'  clear                             ' + t('cli.cmds.clear'), cls:'dim'},
+        {text:'  help                              ' + t('cli.cmds.help'), cls:'dim'},
+        {text:'',cls:''},
+        {text:'  ' + t('cli.tip'), cls:'gray'},
+        {text:'',cls:''},
+      ]);
+      return;
+    }
+
+    if(cmd==='clear'){
+      setLines([]);
+      return;
+    }
+
+    if(cmd==='trending'){
+      const since=args[0]||'daily';
+      if(!['daily','weekly','monthly'].includes(since)){
+        addLine(`  ${t('usage')}: daily/weekly/monthly`,'red');
+        return;
+      }
+      setLoading('trending');
+      addLine(`  ${t('cli.fetching')} (${since})...`,'dim');
+      try{
+        const r=await fetch(`${API}/trending?since=${since}`);
+        if(!r.ok)throw new Error(r.statusText);
+        const data=await r.json();
+        setLoading(null);
+        addLine(`  ${t('cli.found')} ${data.length} ${t('cli.repos')}`,'dim');
+        addLine('','');
+        setLines(p=>[...p,{text:'',cls:''},{text:'',react:<CliTable key='t' repos={data}/>}]);
+      }catch(e){
+        setLoading(null);
+        addLine(`  ${t('error')}: ${e.message}`,'red');
+      }
+      return;
+    }
+
+    if(cmd==='topic'){
+      const topicIdx=args.indexOf('--min');
+      const topic=topicIdx>0?args.slice(0,topicIdx).join(' '):args[0];
+      const minStars=topicIdx>=0?parseInt(args[topicIdx+1])||500:200;
+      if(!topic){
+        addLine(`  ${t('usage')}: topic <name> [--min N]`,'yellow');
+        return;
+      }
+      setLoading('topic');
+      addLine(`  searching "${topic}" (min ★${minStars})...`,'dim');
+      try{
+        const r=await fetch(`${API}/topics/search?topic=${topic}&min=${minStars}`);
+        if(!r.ok)throw new Error(r.statusText);
+        const data=await r.json();
+        setLoading(null);
+        if(Array.isArray(data)&&data.length){
+          addLine(`  ${t('cli.found')} ${data.length} ${t('cli.repos')}`,'dim');
+          addLine('','');
+          setLines(p=>[...p,{text:'',cls:''},{text:'',react:<CliTable key='top' repos={data}/>}]);
+        } else addLine(`  ${t('noResults')}`,'yellow');
+      }catch(e){
+        setLoading(null);
+        addLine(`  ${t('error')}: ${e.message}`,'red');
+      }
+      return;
+    }
+
+    if(cmd==='batch'){
+      setLoading('batch');
+      addLine(`  ${t('cli.scanned')}...` ,'dim');
+      try{
+        const r=await fetch(`${API}/topics/batch`);
+        if(!r.ok)throw new Error(r.statusText);
+        const d=await r.json();
+        setLoading(null);
+        const entries=Object.entries(d).filter(([,v])=>v.length).map(([k,v])=>({topic:k,repos:v}));
+        addLine(`  ${t('cli.scanned')} ${entries.length} topics, ${entries.reduce((s,e)=>s+e.repos.length,0)} repos`,'dim');
+        addLine('','');
+        setLines(p=>[...p,{text:'',cls:''},{text:'',react:<CliTopicsView key='bt' data={entries}/>}]);
+      }catch(e){
+        setLoading(null);
+        addLine(`  ${t('error')}: ${e.message}`,'red');
+      }
+      return;
+    }
+
+    if(cmd==='report'){
+      setLoading('report');
+      addLine(`  ${t('cli.generating')}...`,'dim');
+      try{
+        const r=await fetch(`${API}/report`);
+        if(!r.ok)throw new Error(r.statusText);
+        const data=await r.json();
+        setLoading(null);
+        addLine('','');
+        setLines(p=>[...p,{text:'',cls:''},{text:'',react:<CliReportView key='rp' data={data}/>}]);
+      }catch(e){
+        setLoading(null);
+        addLine(`  error: ${e.message}`,'red');
+      }
+      return;
+    }
+
+    if(cmd==='lang'){
+      const langName=args[0];
+      if(!langName){
+        addLine('  '+t('usage')+': lang <language>','yellow');
+        return;
+      }
+      setLoading('lang');
+      addLine(`  ${t('cli.fetching')} "${langName}"...`,'dim');
+      try{
+        const r=await fetch(`${API}/trending?since=daily&language=${langName}`);
+        if(!r.ok)throw new Error(r.statusText);
+        const data=await r.json();
+        setLoading(null);
+        if(data.length){
+          addLine(`  ${t('cli.found')} ${data.length} ${langName} repos`,'dim');
+          addLine('','');
+          setLines(p=>[...p,{text:'',cls:''},{text:'',react:<CliTable key='lg' repos={data}/>}]);
+        } else addLine('  '+t('noResults')+' for '+langName,'yellow');
+      }catch(e){
+        setLoading(null);
+        addLine(`  ${t('error')}: ${e.message}`,'red');
+      }
+      return;
+    }
+
+    addLine(`  ${t('unknown')}: ${cmd}`, 'red');
+  },[t, lang]);
+
+  const onKeyDown=(e)=>{
+    if(e.key==='Enter'){
+      execute(input);
+      setInput('');
+    } else if(e.key==='ArrowUp'){
+      e.preventDefault();
+      if(history.length===0)return;
+      const newIdx=histIdx===-1?history.length-1:Math.max(0,histIdx-1);
+      setHistIdx(newIdx);
+      setInput(history[newIdx]);
+    } else if(e.key==='ArrowDown'){
+      e.preventDefault();
+      if(histIdx===-1){setInput('');return}
+      const newIdx=histIdx+1;
+      if(newIdx>=history.length){setHistIdx(-1);setInput('');return}
+      setHistIdx(newIdx);
+      setInput(history[newIdx]);
+    }
+  };
+
+  return <div className="cli-root" onClick={()=>inputRef.current?.focus()}>
+    <div className="cli-output" ref={outRef}>
+      {lines.map((l,i)=>{
+        if(l.react)return <div key={i}>{l.react}</div>;
+        return <CliLine key={i} cls={l.cls}>{l.text}</CliLine>;
+      })}
+      {loading&&<div className="cli-loading"><span style={{animation:'blinkCl 1s step-end infinite'}}>▌</span> {loading}...</div>}
+    </div>
+    <div className="cli-input-line">
+      <span className="cli-prompt-path">~/tracker</span>
+      <span className="cli-prompt">❯ </span>
+      <input ref={inputRef} className="cli-input" value={input}
+        onChange={e=>setInput(e.target.value)} onKeyDown={onKeyDown}
+        placeholder="type command..." spellCheck={false} autoFocus
+      />
+    </div>
+  </div>;
+}
+
+// ===================================================================
+//  MODE 2: TUI — 终端仪表盘
+// ===================================================================
+const tuiStyles = `
+.tui-root{background:#0c0c0c;color:#f8f8f2;min-height:100vh;font-family:'JetBrains Mono',monospace;padding-top:40px;display:flex;flex-direction:column;}
+.tui-header{background:#111;border-bottom:1px solid #ff79c622;padding:8px 20px;display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:6px;font-size:12px;}
+.tui-logo{color:#ff79c6;font-weight:700;font-size:14px;letter-spacing:1px;}
+.tui-logo::before{content:'◆ ';color:#ff79c680}
+.tui-badge{border:1px solid #ff79c640;padding:1px 6px;font-size:9px;color:#ff79c680;border-radius:2px;}
+.tui-nav{display:flex;gap:1px;}
+.tui-nav-btn{background:transparent;border:1px solid transparent;color:#6272a4;padding:4px 12px;font-family:inherit;font-size:10px;cursor:pointer;letter-spacing:1px;text-transform:uppercase;transition:all .15s;}
+.tui-nav-btn.active{color:#ff79c6;border-color:#ff79c640;background:#ff79c610;}
+.tui-nav-btn:hover{color:#f8f8f2;}
+.tui-body{flex:1;padding:14px 20px;overflow-y:auto;}
+.tui-body::before{content:'';position:fixed;top:0;left:0;width:100%;height:100%;background:repeating-linear-gradient(0deg,rgba(255,121,198,.008) 0,rgba(255,121,198,.008) 1px,transparent 1px,transparent 3px);pointer-events:none;z-index:999;}
+.tui-stats{display:flex;gap:20px;margin-bottom:12px;font-size:11px;color:#6272a4;}
+.tui-stat span{color:#ff79c6;font-weight:600;}
+.tui-controls{display:flex;gap:8px;margin-bottom:12px;flex-wrap:wrap;}
+.tui-select{background:#000;color:#f8f8f2;border:1px solid #ff79c630;padding:4px 8px;font-family:inherit;font-size:10px;cursor:pointer;}
+.tui-select option{background:#000;color:#f8f8f2;}
+.tui-btn{background:#ff79c610;color:#ff79c6;border:1px solid #ff79c640;padding:4px 10px;font-family:inherit;font-size:10px;cursor:pointer;transition:all .15s;}
+.tui-btn:hover{background:#ff79c620;}
+.tui-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:6px;}
+.tui-card{border:1px solid #ff79c615;padding:10px 12px;transition:all .2s;cursor:default;}
+.tui-card:hover{border-color:#ff79c640;background:#ff79c608;}
+.tui-card-name{font-weight:600;font-size:12px;margin-bottom:3px;}
+.tui-card-name a{color:#ff79c6;text-decoration:none;}
+.tui-card-name a:hover{text-decoration:underline;}
+.tui-card-desc{font-size:10px;color:#6272a4;line-height:1.4;margin-bottom:6px;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;}
+.tui-card-meta{display:flex;gap:12px;font-size:9px;color:#44475a;flex-wrap:wrap;}
+.tui-card-meta .hl{color:#f1fa8c;font-weight:600;}
+.tui-loading{text-align:center;padding:60px;color:#6272a4;font-size:11px;}
+.tui-spinner{display:inline-block;width:16px;height:16px;border:2px solid #ff79c610;border-top-color:#ff79c6;border-radius:50%;animation:tuiSpin .6s linear infinite;margin-bottom:6px;}
+@keyframes tuiSpin{to{transform:rotate(360deg)}}
+.tui-footer{border-top:1px solid #ff79c615;padding:6px 20px;font-size:9px;color:#44475a;display:flex;gap:16px;}
+.tui-topics-g{display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:6px;}
+.tui-tg{border:1px solid #ff79c615;padding:8px 10px;}
+.tui-tg h3{font-size:10px;color:#ff79c6;font-weight:400;margin-bottom:4px;text-transform:uppercase;letter-spacing:.5px;}
+.tui-tg-item{font-size:9px;color:#6272a4;padding:2px 0;display:flex;justify-content:space-between;}
+.tui-tg-item a{color:#f8f8f2;text-decoration:none;}
+.tui-tg-item a:hover{color:#ff79c6;}
+.tui-rg{display:grid;grid-template-columns:repeat(auto-fill,minmax(240px,1fr));gap:6px;}
+.tui-rc{border:1px solid #ff79c615;padding:8px 10px;}
+.tui-rc .nm{font-size:11px;}
+.tui-rc .nm a{color:#ff79c6;text-decoration:none;}
+.tui-rc .mt{font-size:9px;color:#6272a4;margin-top:3px;}
+`;
+
+function TuiCard({r}){
+  return <div className="tui-card">
+    <div className="tui-card-name"><a href={r.url||'#'} target="_blank">{r.fullName||'?'}</a></div>
+    <div className="tui-card-desc">{(r.description||'').slice(0,100)}</div>
+    <div className="tui-card-meta">
+      {r.language&&<span>{r.language}</span>}
+      <span>★ {(r.totalStars||r.stars||0).toLocaleString()}</span>
+      {r.todayStars?<span className="hl">+{r.todayStars}</span>:null}
+      <span>⑂ {r.forks||0}</span>
+    </div>
+  </div>;
+}
+
+function TuiTopicsView({t}){
+  const [data,setData]=useState(null);const [q,setQ]=useState('');const [l,setL]=useState(false);const [e,setE]=useState('');
+  const search=async()=>{if(!q)return;setL(true);setE('');try{const r=await fetch(`${API}/topics/search?topic=${q}&min=200`);if(!r.ok)throw new Error();setData(await r.json())}catch(x){setE(x.message)}finally{setL(false)}};
+  const batch=async()=>{setL(true);setE('');setQ('(batch)');try{const r=await fetch(`${API}/topics/batch`);if(!r.ok)throw new Error();const d=await r.json();setData(Object.entries(d).filter(([,v])=>v.length).map(([k,v])=>({topic:k,repos:v})))}catch(x){setE(x.message)}finally{setL(false)}};
+  return <><div className="tui-controls">
+    <input value={q} onChange={e=>setQ(e.target.value)} placeholder="topic..." onKeyDown={e=>e.key==='Enter'&&search()}
+      style={{background:'#000',border:'1px solid #ff79c630',color:'#f8f8f2',padding:'4px 8px',fontFamily:'inherit',fontSize:'10px',outline:'none',width:140}} />
+    <button className="tui-btn" onClick={search}>{t('query')}</button>
+    <button className="tui-btn" onClick={batch}>{t('batch')}</button>
+  </div>
+  {l?<div className="tui-loading"><div className="tui-spinner"></div>{t('scanning')}</div>
+  :e?<div style={{color:'#ff5555',fontSize:11}}>{e}</div>
+  :Array.isArray(data)&&data[0]?.topic?
+    <div className="tui-topics-g">{data.map(g=><div key={g.topic} className="tui-tg">
+      <h3>▸ {g.topic} ({g.repos.length})</h3>
+      {g.repos.slice(0,5).map(r=><div key={r.fullName} className="tui-tg-item">
+        <a href={r.url} target="_blank">{r.fullName}</a><span>★{r.stars?.toLocaleString()}</span>
+      </div>)}
+    </div>)}</div>
+  :Array.isArray(data)?<div className="tui-grid">{data.map((r,i)=><TuiCard key={r.fullName||i} r={r}/>)}</div>
+  :null}</>;
+}
+
+function TuiReportView({t}){
+  const [r,setR]=useState(null);
+  useEffect(()=>{fetch(`${API}/report`).then(r=>r.json()).then(setR).catch(()=>{})},[]);
+  if(!r||r.message)return <div className="tui-loading"><div className="tui-spinner"></div>{r?.message||t('loading')}</div>;
+  return <><div className="tui-stats"><span>{t('daysTracked')} <span>{r.trackedDays}{t('days')}</span></span><span>{t('uniqueRepos')} <span>{r.uniqueRepos}</span></span></div>
+  <div className="tui-rg">{r.topTrending?.slice(0,12).map(r=><div key={r.fullName} className="tui-rc">
+    <div className="nm"><a href={r.url} target="_blank">{r.fullName}</a></div>
+    <div className="mt">{r.appearances}{t('days')} · ★{r.totalStarsLatest?.toLocaleString()} · {r.language||'—'}</div>
+  </div>)}</div></>;
+}
+
+function TuiMode({t, lang}){
+  const [view,setView]=useState('trending');
+  const [since,setSince]=useState('daily');
+  const [data,setData]=useState(null);
+  const [loading,setLoading]=useState(false);
+  const [err,setErr]=useState('');
+
+  const fetchTrending=useCallback(async(s)=>{
+    setLoading(true);setErr('');
+    try{const r=await fetch(`${API}/trending?since=${s}`);if(!r.ok)throw new Error();setData(await r.json())}
+    catch(x){setErr(x.message)}finally{setLoading(false)}
+  },[]);
+
+  useEffect(()=>{if(view==='trending')fetchTrending(since)},[view,since,fetchTrending]);
+
+  return <div className="tui-root">
+    <div className="tui-header">
+      <div style={{display:'flex',alignItems:'center',gap:8}}>
+        <span className="tui-logo">GITHUB::TRACKER</span>
+        <span className="tui-badge">{t('badge')}</span>
+      </div>
+      <div className="tui-nav">
+        {['trending','topics','report'].map(v=>(
+          <button key={v} className={'tui-nav-btn'+(view===v?' active':'')} onClick={()=>setView(v)}>{t(v)}</button>
+        ))}
+      </div>
+    </div>
+    <div className="tui-body">
+      {view==='trending'&&<>
+        <div className="tui-stats">
+          <span>{t('repos')} <span>{data?.length||0}</span></span>
+          <span>{t('languages')} <span>{new Set(data?.map(r=>r.language).filter(Boolean)).size||0}</span></span>
+        </div>
+        <div className="tui-controls">
+          <select className="tui-select" value={since} onChange={e=>{setSince(e.target.value)}}>
+            <option value="daily">{t('daily')}</option><option value="weekly">{t('weekly')}</option><option value="monthly">{t('monthly')}</option>
+          </select>
+          <button className="tui-btn" onClick={()=>fetchTrending(since)}>↻ {t('sync')}</button>
+        </div>
+        {loading?<div className="tui-loading"><div className="tui-spinner"></div>{t('loading')}</div>
+        :err?<div style={{color:'#ff5555',fontSize:11}}>{t('error')}: {err}</div>
+        :data?.length?<div className="tui-grid">{data.map((r,i)=><TuiCard key={r.fullName||i} r={r}/>)}</div>
+        :<div className="tui-loading">{t('noData')}</div>}
+      </>}
+      {view==='topics'&&<TuiTopicsView t={t} lang={lang}/>}
+      {view==='report'&&<TuiReportView t={t} lang={lang}/>}
+    </div>
+    <div className="tui-footer">
+      <span>[SYS] {t('uptime')}: ∞</span>
+      <span>[{t('mem')}] {Math.round(performance.memory?.usedJSHeapSize/1048576||42)}MB</span>
+      <span>[{t('pid')}] 0x{Math.random().toString(16).slice(2,6)}</span>
+    </div>
+  </div>;
+}
+
+// ===================================================================
+//  MODE 3: ELECTRON — 桌面应用风格
+// ===================================================================
+const elStyles = `
+.el-root{min-height:100vh;background:linear-gradient(145deg,#0f0a1a 0%,#1a0f2e 40%,#0a1628 100%);font-family:'Inter',sans-serif;padding-top:40px;position:relative;}
+.el-root::before{content:'';position:fixed;top:0;left:0;width:100%;height:100%;
+  background:radial-gradient(ellipse at 15% 30%,rgba(139,92,246,.08) 0%,transparent 50%),
+             radial-gradient(ellipse at 85% 70%,rgba(6,182,212,.06) 0%,transparent 50%);
+  pointer-events:none;z-index:0;}
+.el-root>*{position:relative;z-index:1;}
+
+/* macOS title bar */
+.el-titlebar{display:flex;align-items:center;padding:8px 16px;gap:10px;
+  background:rgba(0,0,0,.4);backdrop-filter:blur(20px);border-bottom:1px solid rgba(255,255,255,.05);}
+.el-dots{display:flex;gap:6px;}
+.el-dot{width:10px;height:10px;border-radius:50%;}
+.el-dot.r{background:#ff5f57}
+.el-dot.y{background:#ffbd2e}
+.el-dot.g{background:#28c840}
+.el-title-text{font-size:11px;color:rgba(255,255,255,.3);flex:1;text-align:center;font-family:'Inter',sans-serif;}
+
+/* Header */
+.el-header{display:flex;justify-content:space-between;align-items:center;padding:16px 28px 6px;flex-wrap:wrap;gap:12px;}
+.el-logo{font-family:'Outfit',sans-serif;font-weight:900;font-size:26px;letter-spacing:-1px;
+  background:linear-gradient(135deg,#c084fc,#06b6d4,#f59e0b);-webkit-background-clip:text;-webkit-text-fill-color:transparent;}
+.el-logo-sub{font-size:10px;color:rgba(255,255,255,.2);font-weight:400;letter-spacing:4px;text-transform:uppercase;margin-left:10px;}
+.el-nav{display:flex;gap:4px;background:rgba(255,255,255,.03);border-radius:10px;padding:3px;}
+.el-nav-btn{background:transparent;border:none;color:rgba(255,255,255,.35);padding:6px 18px;border-radius:8px;cursor:pointer;font-size:11px;font-weight:500;transition:all .25s;font-family:inherit;}
+.el-nav-btn:hover{color:rgba(255,255,255,.6);background:rgba(255,255,255,.04);}
+.el-nav-btn.active{background:linear-gradient(135deg,#7c3aed80,#2563eb80);color:#fff;box-shadow:0 2px 16px rgba(124,58,237,.2);}
+
+.el-main{max-width:1280px;margin:0 auto;padding:12px 28px 28px;}
+
+.el-stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(120px,1fr));gap:8px;margin-bottom:20px;}
+.el-stat{background:rgba(255,255,255,.03);border:1px solid rgba(255,255,255,.06);border-radius:10px;padding:12px 14px;backdrop-filter:blur(10px);transition:all .25s;}
+.el-stat:hover{background:rgba(255,255,255,.06);border-color:rgba(192,132,252,.2);transform:translateY(-2px);}
+.el-stat-num{font-family:'Outfit',sans-serif;font-weight:700;font-size:20px;background:linear-gradient(135deg,#c084fc,#06b6d4);-webkit-background-clip:text;-webkit-text-fill-color:transparent;}
+.el-stat-label{font-size:10px;color:rgba(255,255,255,.35);margin-top:3px;font-weight:400;text-transform:uppercase;letter-spacing:1px;}
+
+.el-controls{display:flex;gap:8px;margin-bottom:16px;flex-wrap:wrap;}
+.el-controls select,.el-controls button{background:rgba(255,255,255,.04);border:1px solid rgba(255,255,255,.08);border-radius:8px;padding:6px 12px;color:#fff;font-family:inherit;font-size:11px;outline:none;transition:all .2s;}
+.el-controls select:hover{border-color:rgba(192,132,252,.3);}
+.el-controls button{background:linear-gradient(135deg,#7c3aed,#2563eb);border:none;cursor:pointer;font-weight:500;}
+.el-controls button:hover{opacity:.9;transform:translateY(-1px);box-shadow:0 4px 20px rgba(124,58,237,.25);}
+
+.el-section-title{font-family:'Outfit',sans-serif;font-weight:700;font-size:16px;margin-bottom:12px;color:rgba(255,255,255,.8);display:flex;align-items:center;gap:8px;}
+.el-section-title span{font-size:9px;font-weight:600;background:rgba(192,132,252,.15);color:#c084fc;padding:2px 8px;border-radius:20px;}
+
+.el-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:8px;}
+.el-card{background:rgba(255,255,255,.03);border:1px solid rgba(255,255,255,.06);border-radius:12px;padding:16px;backdrop-filter:blur(12px);cursor:pointer;transition:all .35s;position:relative;overflow:hidden;}
+.el-card::before{content:'';position:absolute;top:0;left:0;right:0;height:1.5px;background:linear-gradient(90deg,transparent,#c084fc,transparent);opacity:0;transition:opacity .35s;}
+.el-card:hover{background:rgba(255,255,255,.06);border-color:rgba(192,132,252,.2);transform:translateY(-3px);box-shadow:0 12px 40px rgba(0,0,0,.3);}
+.el-card:hover::before{opacity:1;}
+.el-card-name{font-family:'Outfit',sans-serif;font-weight:600;font-size:14px;margin-bottom:4px;}
+.el-card-name a{color:#c084fc;text-decoration:none;}
+.el-card-name a:hover{color:#e2d4ff;}
+.el-card-desc{font-size:11px;color:rgba(255,255,255,.4);line-height:1.4;margin-bottom:8px;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;}
+.el-card-meta{display:flex;gap:14px;font-size:10px;color:rgba(255,255,255,.3);flex-wrap:wrap;align-items:center;}
+.el-card-meta .hot{color:#ff79c6;font-weight:600;}
+.lang-dot{display:inline-block;width:7px;height:7px;border-radius:50%;margin-right:3px;}
+
+.el-loading{text-align:center;padding:80px;color:rgba(255,255,255,.25);font-size:12px;}
+.el-spinner{width:24px;height:24px;border:2px solid rgba(255,255,255,.04);border-top-color:#c084fc;border-radius:50%;animation:elSpin .8s linear infinite;margin:0 auto 10px;}
+@keyframes elSpin{to{transform:rotate(360deg)}}
+.el-error{text-align:center;padding:60px;color:#ef4444;font-size:12px;}
+
+.el-topics-g{display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:8px;}
+.el-tg{background:rgba(255,255,255,.02);border:1px solid rgba(255,255,255,.06);border-radius:10px;padding:12px;}
+.el-tg h3{font-family:'Outfit',sans-serif;font-weight:600;font-size:12px;color:#c084fc;margin-bottom:6px;display:flex;justify-content:space-between;}
+.el-tg-item{display:flex;justify-content:space-between;padding:2px 0;font-size:10px;color:rgba(255,255,255,.4);border-bottom:1px solid rgba(255,255,255,.02);}
+.el-tg-item:last-child{border:none;}
+.el-tg-item a{color:rgba(255,255,255,.6);text-decoration:none;}
+.el-tg-item a:hover{color:#c084fc;}
+.el-report-g{display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:8px;}
+.el-rc{background:rgba(255,255,255,.03);border:1px solid rgba(255,255,255,.06);border-radius:10px;padding:12px;transition:all .3s;}
+.el-rc:hover{border-color:rgba(192,132,252,.2);background:rgba(255,255,255,.05);}
+.el-rc .nm{font-family:'Outfit',sans-serif;font-weight:600;font-size:13px;}
+.el-rc .nm a{color:#c084fc;text-decoration:none;}
+.el-rc .mt{font-size:10px;color:rgba(255,255,255,.35);margin-top:4px;display:flex;gap:8px;}
+`;
+
+function ElCard({r}){
+  const lc=LANGUAGE_COLORS[r.language]||'#888';
+  return <div className="el-card" onClick={()=>window.open(r.url||'#','_blank')}>
+    <div className="el-card-name"><a href={r.url||'#'} target="_blank">{r.fullName||'?'}</a></div>
+    <div className="el-card-desc">{(r.description||'No description').slice(0,120)}</div>
+    <div className="el-card-meta">
+      {r.language&&<span><span className="lang-dot" style={{background:lc}}></span>{r.language}</span>}
+      <span>★ {(r.totalStars||r.stars||0).toLocaleString()}</span>
+      {r.todayStars?<span className="hot">+{r.todayStars} today</span>:null}
+      <span>⑂ {(r.forks||0).toLocaleString()}</span>
+    </div>
+  </div>;
+}
+
+function ElTopicsView({t}){
+  const [data,setData]=useState(null);const [q,setQ]=useState('');const [l,setL]=useState(false);const [e,setE]=useState('');
+  const search=async()=>{if(!q)return;setL(true);setE('');try{const r=await fetch(`${API}/topics/search?topic=${q}&min=200`);if(!r.ok)throw new Error();setData(await r.json())}catch(x){setE(x.message)}finally{setL(false)}};
+  const batch=async()=>{setL(true);setE('');setQ('(batch)');try{const r=await fetch(`${API}/topics/batch`);if(!r.ok)throw new Error();const d=await r.json();setData(Object.entries(d).filter(([,v])=>v.length).map(([k,v])=>({topic:k,repos:v})))}catch(x){setE(x.message)}finally{setL(false)}};
+  return <><div className="el-controls">
+    <input value={q} onChange={e=>setQ(e.target.value)} placeholder="topic..." onKeyDown={e=>e.key==='Enter'&&search()}
+      style={{background:'rgba(255,255,255,.04)',border:'1px solid rgba(255,255,255,.08)',borderRadius:8,color:'#fff',padding:'6px 12px',fontSize:11,outline:'none',width:140}} />
+    <button onClick={search}>{t('search')}</button>
+    <button onClick={batch} style={{background:'linear-gradient(135deg,#06b6d4,#2563eb)',border:'none',borderRadius:8,padding:'6px 12px',color:'#fff',cursor:'pointer',fontSize:11}}>{t('batch')}</button>
+  </div>
+  {l?<div className="el-loading"><div className="el-spinner"></div>{t('el.loading')}</div>
+  :e?<div className="el-error">{e}</div>
+  :Array.isArray(data)&&data[0]?.topic?
+    <div className="el-topics-g">{data.map(g=><div key={g.topic} className="el-tg">
+      <h3><span>#{g.topic}</span><span>{g.repos.length} {t('repos')}</span></h3>
+      {g.repos.slice(0,5).map(r=><div key={r.fullName} className="el-tg-item">
+        <a href={r.url} target="_blank">{r.fullName}</a><span>★{r.stars?.toLocaleString()}</span>
+      </div>)}
+    </div>)}</div>
+  :Array.isArray(data)?<div className="el-grid">{data.map((r,i)=><ElCard key={r.fullName||i} r={r}/>)}</div>
+  :<div className="el-loading" style={{padding:30}}>{t('el.enterTopic')}</div>}</>;
+}
+
+function ElReportView({t}){
+  const [r,setR]=useState(null);
+  useEffect(()=>{fetch(`${API}/report`).then(r=>r.json()).then(setR).catch(()=>{})},[]);
+  if(!r||r.message)return <div className="el-loading"><div className="el-spinner"></div>{r?.message||t('el.loading')}</div>;
+  return <><div className="el-stats">
+    <div className="el-stat"><div className="el-stat-num">{r.trackedDays}</div><div className="el-stat-label">{t('daysTracked')}</div></div>
+    <div className="el-stat"><div className="el-stat-num">{r.uniqueRepos}</div><div className="el-stat-label">{t('uniqueRepos')}</div></div>
+    <div className="el-stat"><div className="el-stat-num">{r.languageDistribution?.length||0}</div><div className="el-stat-label">{t('languages')}</div></div>
+  </div>
+  <div className="el-section-title">{t('topSustained')} <span>{r.topTrending?.length||0}</span></div>
+  <div className="el-report-g">{r.topTrending?.slice(0,12).map(r=><div key={r.fullName} className="el-rc">
+    <div className="nm"><a href={r.url} target="_blank">{r.fullName}</a></div>
+    <div className="mt"><span>★{r.totalStarsLatest?.toLocaleString()}</span><span>{r.appearances}{t('days')}</span><span>{r.language||'—'}</span></div>
+  </div>)}</div></>;
+}
+
+function ElMode({t, lang}){
+  const [view,setView]=useState('trending');
+  const [since,setSince]=useState('daily');
+  const [data,setData]=useState(null);
+  const [loading,setLoading]=useState(false);
+  const [err,setErr]=useState('');
+
+  const fetchTrending=useCallback(async(s)=>{
+    setLoading(true);setErr('');
+    try{const r=await fetch(`${API}/trending?since=${s}`);if(!r.ok)throw new Error();setData(await r.json())}
+    catch(x){setErr(x.message)}finally{setLoading(false)}
+  },[]);
+
+  useEffect(()=>{if(view==='trending')fetchTrending(since)},[view,since,fetchTrending]);
+
+  const isNativeElectron = typeof IS_ELECTRON !== 'undefined' && IS_ELECTRON;
+
+  return <div className="el-root">
+    {/* Simulated macOS titlebar — hidden in real Electron */}
+    {!isNativeElectron && <div className="el-titlebar">
+      <div className="el-dots"><span className="el-dot r"/><span className="el-dot y"/><span className="el-dot g"/></div>
+      <div className="el-title-text">{t('el.title')} — {view}</div>
+    </div>}
+
+    <div className="el-header" style={isNativeElectron?{WebkitAppRegion:'drag',paddingTop:40}:{}}>
+      <div style={{display:'flex',alignItems:'center',WebkitAppRegion:'no-drag'}}>
+        <span className="el-logo">◆ {t('el.logo')}</span>
+        <span className="el-logo-sub">{t('el.subtitle')}</span>
+      </div>
+      <div className="el-nav">
+        {['trending','topics','report'].map(v=>(
+          <button key={v} className={'el-nav-btn'+(view===v?' active':'')} onClick={()=>setView(v)}>{t(v)}</button>
+        ))}
+      </div>
+    </div>
+
+    <div className="el-main">
+      {view==='trending'&&<>
+        <div className="el-controls">
+          <select value={since} onChange={e=>setSince(e.target.value)}>
+            <option value="daily">{t('daily')}</option><option value="weekly">{t('weekly')}</option><option value="monthly">{t('monthly')}</option>
+          </select>
+          <button onClick={()=>fetchTrending(since)}>⟳ {t('refresh')}</button>
+        </div>
+        {loading?<div className="el-loading"><div className="el-spinner"></div>{t('el.loading')}</div>
+        :err?<div className="el-error">⚠ {err}</div>
+        :<>
+          <div className="el-stats">
+            <div className="el-stat"><div className="el-stat-num">{data?.length||0}</div><div className="el-stat-label">{t('repos')}</div></div>
+            <div className="el-stat"><div className="el-stat-num">{new Set(data?.map(r=>r.language).filter(Boolean)).size||0}</div><div className="el-stat-label">{t('languages')}</div></div>
+            <div className="el-stat"><div className="el-stat-num">{data?.reduce((s,r)=>s+(r.todayStars||0),0)||0}</div><div className="el-stat-label">{t('starsToday')}</div></div>
+            <div className="el-stat"><div className="el-stat-num">{data?.reduce((s,r)=>s+(r.forks||0),0)||0}</div><div className="el-stat-label">{t('forks')}</div></div>
+          </div>
+          <div className="el-section-title">{t('trending')} <span>{data?.length||0}</span></div>
+          {data?.length?<div className="el-grid">{data.map((r,i)=><ElCard key={r.fullName||i} r={r}/>)}</div>:null}
+        </>}
+      </>}
+      {view==='topics'&&<ElTopicsView t={t}/>}
+      {view==='report'&&<ElReportView t={t}/>}
+    </div>
+  </div>;
+}
+
+// ===================================================================
+//  APP
+// ===================================================================
+const appStyles = `
+.mode-enter{animation:fadeSlide .3s ease-out}
+@keyframes fadeSlide{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:translateY(0)}}
+`;
+
+function App(){
+  const [mode,setMode]=useState(()=>localStorage.getItem('gt-mode')||'tui');
+  const [animKey,setAnimKey]=useState(0);
+  const {t,lang,setLang}=useI18n();
+
+  const switchMode=(m)=>{setMode(m);setAnimKey(k=>k+1);localStorage.setItem('gt-mode',m)};
+
+  useEffect(()=>{
+    const s=document.getElementById('mode-styles');
+    if(s)s.remove();
+    const st=document.createElement('style');st.id='mode-styles';
+    if(mode==='cli')st.textContent=cliStyles;
+    else if(mode==='tui')st.textContent=tuiStyles;
+    else st.textContent=elStyles;
+    document.head.appendChild(st);
+    return ()=>{const ss=document.getElementById('mode-styles');if(ss)ss.remove()};
+  },[mode]);
+
+  return <>
+    <ModeSwitcher mode={mode} onMode={switchMode} onRefresh={()=>{}} lang={lang} setLang={setLang}/>
+    <div key={animKey} className="mode-enter">
+      {mode==='cli'&&<CliMode t={t} lang={lang}/>}
+      {mode==='tui'&&<TuiMode t={t} lang={lang}/>}
+      {mode==='el'&&<ElMode t={t} lang={lang}/>}
+    </div>
+  </>;
+}
+
+const as=document.createElement('style');as.id='app-styles-base';as.textContent=appStyles;
+document.head.appendChild(as);
+const root=ReactDOM.createRoot(document.getElementById('root'));
+root.render(<App/>);
+</script>
+</body>
+</html>

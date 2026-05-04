@@ -1,0 +1,77 @@
+{
+  "name": "github-trend-tracker",
+  "version": "2.0.0",
+  "description": "GitHub Trending & Topics Tracker — AI时代超级个体的开源情报工具",
+  "main": "electron/main.js",
+  "type": "module",
+  "scripts": {
+    "start": "node src/index.js",
+    "cli": "node src/cli.js",
+    "trending": "node src/cli.js trending",
+    "topics": "node src/cli.js topics",
+    "report": "node src/cli.js report",
+    "dev": "node src/index.js --port 3456",
+    "electron": "electron .",
+    "electron:dev": "NODE_ENV=development electron .",
+    "pack": "electron-builder --dir",
+    "dist": "electron-builder",
+    "dist:win": "electron-builder --win",
+    "dist:mac": "electron-builder --mac",
+    "dist:linux": "electron-builder --linux"
+  },
+  "build": {
+    "appId": "com.github.trend-tracker",
+    "productName": "GitHub Tracker",
+    "directories": {
+      "output": "release"
+    },
+    "files": [
+      "electron/**/*",
+      "src/**/*",
+      "public/**/*",
+      "data/**/*",
+      "package.json"
+    ],
+    "win": {
+      "target": [
+        { "target": "nsis", "arch": ["x64"] }
+      ],
+      "icon": null
+    },
+    "mac": {
+      "target": [
+        { "target": "dmg", "arch": ["x64", "arm64"] }
+      ],
+      "category": "public.app-category.developer-tools"
+    },
+    "linux": {
+      "target": [
+        { "target": "AppImage", "arch": ["x64"] },
+        { "target": "deb", "arch": ["x64"] }
+      ],
+      "category": "Development"
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true
+    }
+  },
+  "keywords": [
+    "github",
+    "trending",
+    "topics",
+    "tracker",
+    "opensource",
+    "electron",
+    "cross-platform"
+  ],
+  "license": "MIT",
+  "dependencies": {
+    "@octokit/rest": "^22.0.1",
+    "cheerio": "^1.2.0"
+  },
+  "devDependencies": {
+    "electron": "^41.5.0",
+    "electron-builder": "^26.8.1"
+  }
+}
