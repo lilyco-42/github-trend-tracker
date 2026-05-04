@@ -13,6 +13,7 @@ permissions:
 jobs:
   build:
     strategy:
+      fail-fast: false
       matrix:
         include:
           - os: ubuntu-latest
@@ -44,7 +45,7 @@ jobs:
         run: npm ci
 
       - name: Build ${{ matrix.target }} (${{ matrix.arch }})
-        run: npx electron-builder --${{ matrix.target }} --arch ${{ matrix.arch }} --publish never
+        run: npx electron-builder --${{ matrix.target }} --${{ matrix.arch }} --publish never
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
