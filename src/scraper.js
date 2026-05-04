@@ -1,10 +1,53 @@
 /**
  * GitHub Trending Scraper
  * 抓取 github.com/trending 页面获取当日热门仓库
+ * 自动回退到 GitHub Search API（当 gh trending 不可达时）
  */
 import * as cheerio from 'cheerio';
 
 const TRENDING_URL = 'https://github.com/trending';
+const API_BASE = 'https://api.github.com';
+
+/**
+ * 直连失败时通过 Search API 获取近似 trending 数据
+ */
+async function fallbackSearch(since = 'daily', language = '') {
+  const now = new Date();
+  let daysBack;
+  if (since === 'daily') daysBack = 7;
+  else if (since === 'weekly') daysBack = 30;
+  else daysBack = 90;
+
+  const sinceDate = new Date(now - daysBack * 86400000).toISOString().split('T')[0];
+  let query = `created:>=${sinceDate} stars:>=${since === 'monthly' ? 200 : 50}`;
+  if (language) query += `+language:${language}`;
+
+  const res = await fetch(
+    `${API_BASE}/search/repositories?q=${encodeURIComponent(query)}&sort=stars&order=desc&per_page=25`,
+    {
+      headers: { 'Accept': 'application/vnd.github.v3+json', 'User-Agent': 'github-tracker/2.0' },
+      signal: AbortSignal.timeout(10000),
+    }
+  );
+  if (!res.ok) throw new Error(`Search API fallback failed: ${res.status}`);
+  const data = await res.json();
+
+  return (data.items || []).map(repo => ({
+    owner: repo.owner?.login || '',
+    name: repo.name || '',
+    fullName: repo.full_name || '',
+    description: repo.description || '',
+    language: repo.language || '',
+    totalStars: repo.stargazers_count || 0,
+    todayStars: 0, // Search API 无今日新增数据
+    forks: repo.forks_count || 0,
+    todayForks: 0,
+    builders: [],
+    url: repo.html_url || '',
+    scrapedAt: new Date().toISOString(),
+    since,
+  }));
+}
 
 /**
  * 抓取 GitHub Trending 仓库列表
@@ -24,17 +67,16 @@ export async function scrapeTrending(since = 'daily', language = '') {
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
         'Accept': 'text/html',
       },
-      signal: AbortSignal.timeout(15000),
+      signal: AbortSignal.timeout(8000),
     });
   } catch (err) {
-    if (err.name === 'TimeoutError') {
-      throw new Error('Request to github.com/trending timed out (15s). Check your network.');
-    }
-    throw new Error(`Cannot reach github.com/trending — network issue (${err.cause?.code || err.message}). Check firewall/proxy settings.`);
+    console.warn(`[scraper] github.com/trending unreachable, falling back to Search API`);
+    return fallbackSearch(since, language);
   }
 
   if (!res.ok) {
-    throw new Error(`Failed to fetch trending: ${res.status}`);
+    console.warn(`[scraper] github.com/trending status ${res.status}, falling back to Search API`);
+    return fallbackSearch(since, language);
   }
 
   const html = await res.text();

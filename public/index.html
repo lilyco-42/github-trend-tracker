@@ -52,8 +52,17 @@ const L = {
     repos:'仓库',languages:'语言',starsToday:'今日星标',forks:'分支',
     days:'天',today:'今日',daily:'每日',weekly:'每周',monthly:'每月',
     uptime:'运行时间',pid:'进程',mem:'内存',badge:'终端 v2.0',
+    cnfg:'配置',cnfgTitle:'LM Studio 设置',cnfgUrl:'API 地址',cnfgToken:'API Token',
+    cnfgTest:'测试连接',cnfgSave:'保存',cnfgClose:'关闭',cnfgSaved:'已保存',
+    cnfgTesting:'测试中...',cnfgSaving:'保存中...',cnfgUrlPH:'http://localhost:1234',
+    cnfgTokenPH:'输入 LM Studio API Token',cnfgOnline:'LM Studio 在线',
+    cnfgOffline:'LM Studio 未运行',cnfgUrlInvalid:'URL 格式无效',
     sustained:'持续上榜',daysTracked:'追踪天数',uniqueRepos:'独立仓库',
     topSustained:'最多持续上榜',
+    ai:'AI 分析',aiAnalyze:'分析',aiInsight:'洞察',
+    aiSummary:'AI 摘要',aiOffline:'LM Studio 未运行',
+    aiRepoAnalysis:'仓库分析',aiTrends:'趋势洞察',aiTopicSummary:'话题总结',
+    aiThinking:'AI 思考中...',aiError:'分析失败',
     cli:{
       welcome:'输入 "help" 查看可用命令',
       found:'找到',repos:'个仓库',fetching:'获取中...',
@@ -79,8 +88,17 @@ const L = {
     repos:'Repos',languages:'Languages',starsToday:'Stars Today',forks:'Forks',
     days:'days',today:'today',daily:'Daily',weekly:'Weekly',monthly:'Monthly',
     uptime:'uptime',pid:'PID',mem:'MEM',badge:'TUI v2.0',
+    cnfg:'Config',cnfgTitle:'LM Studio Settings',cnfgUrl:'API URL',cnfgToken:'API Token',
+    cnfgTest:'Test',cnfgSave:'Save',cnfgClose:'Close',cnfgSaved:'Saved',
+    cnfgTesting:'Testing...',cnfgSaving:'Saving...',cnfgUrlPH:'http://localhost:1234',
+    cnfgTokenPH:'Enter LM Studio API Token',cnfgOnline:'LM Studio Online',
+    cnfgOffline:'LM Studio Offline',cnfgUrlInvalid:'Invalid URL format',
     sustained:'Top Sustained',daysTracked:'Days Tracked',uniqueRepos:'Unique Repos',
     topSustained:'Top Sustained',
+    ai:'AI Analysis',aiAnalyze:'Analyze',aiInsight:'Insights',
+    aiSummary:'AI Summary',aiOffline:'LM Studio not running',
+    aiRepoAnalysis:'Repo Analysis',aiTrends:'Trend Insights',aiTopicSummary:'Topic Summary',
+    aiThinking:'AI thinking...',aiError:'Analysis failed',
     cli:{
       welcome:'Type "help" for available commands',
       found:'found',repos:'repos',fetching:'fetching...',
@@ -110,6 +128,146 @@ function useI18n(){
 }
 
 // ===================================================================
+//  AI — LM Studio
+// ===================================================================
+function useAi() {
+  const [busy, setBusy] = useState(false);
+  const [result, setResult] = useState(null);
+
+  const call = useCallback(async (endpoint, payload) => {
+    setBusy(true); setResult(null);
+    try {
+      const r = await fetch(endpoint, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      });
+      if (!r.ok) throw new Error((await r.json()).error || r.statusText);
+      const d = await r.json();
+      setResult(d);
+      return d;
+    } catch (e) {
+      setResult({ error: e.message });
+      return { error: e.message };
+    } finally { setBusy(false); }
+  }, []);
+
+  const summarizeRepo = useCallback((repo) => call('/api/ai/summarize-repo', { repo }), [call]);
+  const trendInsights = useCallback((repos) => call('/api/ai/trend-insights', { repos }), [call]);
+  const topicSummary = useCallback((topic, repos) => call('/api/ai/topic-summary', { topic, repos }), [call]);
+
+  return { busy, result, summarizeRepo, trendInsights, topicSummary, setResult };
+}
+
+// ===================================================================
+//  SETTINGS MODAL — LM Studio 配置
+// ===================================================================
+const modalOverlay = {position:'fixed',inset:0,zIndex:999999,background:'rgba(0,0,0,.7)',display:'flex',alignItems:'center',justifyContent:'center',backdropFilter:'blur(4px)'};
+const modalBox = {background:'#1a1a2e',border:'1px solid rgba(255,255,255,.1)',borderRadius:12,padding:'24px',width:400,maxWidth:'90vw',fontFamily:'Inter,sans-serif',color:'#e0e0e8'};
+
+function SettingsModal({t, lang, onClose}) {
+  const [url, setUrl] = useState('');
+  const [token, setToken] = useState('');
+  const [status, setStatus] = useState(''); // '' | 'testing' | 'saving' | 'saved' | 'error'
+  const [msg, setMsg] = useState('');
+  const [online, setOnline] = useState(null); // null | true | false
+
+  // 加载当前设置
+  useEffect(() => {
+    fetch('/api/settings').then(r=>r.json()).then(d => {
+      setUrl(d.lm_url || 'http://localhost:1234');
+      setOnline(d.lm_configured === true);
+    }).catch(() => {});
+  }, []);
+
+  const testConn = async () => {
+    setStatus('testing'); setMsg('');
+    try {
+      // 先保存当前填写的内容再测试
+      const r = await fetch('/api/settings/lm', {
+        method: 'POST', headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({ url, token: token || undefined }),
+      });
+      if (!r.ok) throw new Error((await r.json()).error || '');
+      const h = await fetch('/api/ai/health');
+      const d = await h.json();
+      setOnline(d.online);
+      setStatus('');
+      setMsg(d.online ? t('cnfgOnline') : t('cnfgOffline'));
+    } catch(e) {
+      setOnline(false);
+      setStatus('error');
+      setMsg(e.message || t('cnfgOffline'));
+    }
+  };
+
+  const saveConfig = async () => {
+    // 验证 URL
+    if (url) {
+      try { new URL(url); } catch { setStatus('error'); setMsg(t('cnfgUrlInvalid')); return; }
+    }
+    setStatus('saving'); setMsg('');
+    try {
+      const r = await fetch('/api/settings/lm', {
+        method: 'POST', headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({ url: url || undefined, token: token || undefined }),
+      });
+      if (!r.ok) throw new Error((await r.json()).error || '');
+      setStatus('saved'); setMsg(t('cnfgSaved'));
+      setTimeout(() => onClose(), 1200);
+    } catch(e) {
+      setStatus('error');
+      setMsg(e.message || 'Save failed');
+    }
+  };
+
+  const isBusy = status === 'testing' || status === 'saving';
+
+  return <div style={modalOverlay} onClick={(e) => e.target===e.currentTarget && onClose()}>
+    <div style={modalBox}>
+      <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:20}}>
+        <span style={{fontSize:14,fontWeight:600}}>⚙ {t('cnfgTitle')}</span>
+        <button onClick={onClose} style={{background:'transparent',border:'none',color:'rgba(255,255,255,.3)',cursor:'pointer',fontSize:18,lineHeight:1}}>✕</button>
+      </div>
+
+      <div style={{marginBottom:14}}>
+        <label style={{fontSize:10,color:'rgba(255,255,255,.4)',display:'block',marginBottom:4,textTransform:'uppercase',letterSpacing:1}}>{t('cnfgUrl')}</label>
+        <input value={url} onChange={e=>setUrl(e.target.value)} placeholder={t('cnfgUrlPH')}
+          style={{width:'100%',background:'rgba(255,255,255,.05)',border:'1px solid rgba(255,255,255,.1)',borderRadius:6,padding:'8px 10px',color:'#fff',fontSize:12,outline:'none',fontFamily:'monospace'}} />
+      </div>
+
+      <div style={{marginBottom:18}}>
+        <label style={{fontSize:10,color:'rgba(255,255,255,.4)',display:'block',marginBottom:4,textTransform:'uppercase',letterSpacing:1}}>{t('cnfgToken')}</label>
+        <input value={token} onChange={e=>setToken(e.target.value)} placeholder={t('cnfgTokenPH')} type="password"
+          style={{width:'100%',background:'rgba(255,255,255,.05)',border:'1px solid rgba(255,255,255,.1)',borderRadius:6,padding:'8px 10px',color:'#fff',fontSize:12,outline:'none',fontFamily:'monospace'}} />
+      </div>
+
+      {msg && <div style={{fontSize:11,marginBottom:12,padding:'6px 10px',borderRadius:6,
+        background: status==='error' ? 'rgba(239,68,68,.15)' : 'rgba(34,197,94,.15)',
+        border:`1px solid ${status==='error' ? 'rgba(239,68,68,.3)' : 'rgba(34,197,94,.3)'}`,
+        color: status==='error' ? '#ef4444' : '#22c55e'}}>
+        {msg}
+      </div>}
+
+      <div style={{display:'flex',gap:8,justifyContent:'flex-end'}}>
+        <button onClick={testConn} disabled={isBusy}
+          style={{background:'rgba(255,255,255,.06)',border:'1px solid rgba(255,255,255,.1)',borderRadius:6,padding:'7px 14px',color:'rgba(255,255,255,.6)',cursor:'pointer',fontSize:11,fontFamily:'inherit'}}>
+          {status==='testing' ? '...' : '🔌'} {t('cnfgTest')}
+        </button>
+        <button onClick={onClose} disabled={isBusy}
+          style={{background:'rgba(255,255,255,.06)',border:'1px solid rgba(255,255,255,.1)',borderRadius:6,padding:'7px 14px',color:'rgba(255,255,255,.6)',cursor:'pointer',fontSize:11,fontFamily:'inherit'}}>
+          {t('cnfgClose')}
+        </button>
+        <button onClick={saveConfig} disabled={isBusy}
+          style={{background:'linear-gradient(135deg,#7c3aed,#2563eb)',border:'none',borderRadius:6,padding:'7px 18px',color:'#fff',cursor:'pointer',fontSize:11,fontWeight:500,fontFamily:'inherit',opacity:isBusy?.5:1}}>
+          {status==='saving' ? '...' : '💾'} {t('cnfgSave')}
+        </button>
+      </div>
+    </div>
+  </div>;
+}
+
+// ===================================================================
 //  MODE SWITCHER (shared across all modes)
 // ===================================================================
 const MODES = [
@@ -118,7 +276,7 @@ const MODES = [
   { id:'el',  label:'ELECTRON',icon:'●', color:'#8be9fd', desc:'桌面应用风格' },
 ];
 
-function ModeSwitcher({mode,onMode,onRefresh,lang,setLang}){
+function ModeSwitcher({mode,onMode,onRefresh,lang,setLang,onOpenSettings}){
   return (
     <div style={{
       position:'fixed',top:0,left:0,right:0,zIndex:99999,
@@ -169,6 +327,15 @@ function ModeSwitcher({mode,onMode,onRefresh,lang,setLang}){
         onMouseEnter={e=>{e.target.style.color='#fff';e.target.style.borderColor='rgba(255,255,255,.2)'}}
         onMouseLeave={e=>{e.target.style.color='rgba(255,255,255,.4)';e.target.style.borderColor='rgba(255,255,255,.08)'}}
       >{lang==='zh'?'EN':'中'}</button>
+      <button onClick={onOpenSettings}
+        style={{
+          background:'rgba(255,255,255,.04)',border:'1px solid rgba(255,255,255,.08)',
+          color:'rgba(255,255,255,.3)',padding:'4px 8px',borderRadius:4,cursor:'pointer',
+          fontSize:'12px',transition:'all .2s',fontFamily:'inherit',marginLeft:4,
+        }}
+        onMouseEnter={e=>{e.target.style.color='#fff';e.target.style.borderColor='rgba(255,255,255,.2)'}}
+        onMouseLeave={e=>{e.target.style.color='rgba(255,255,255,.3)';e.target.style.borderColor='rgba(255,255,255,.08)'}}
+      >⚙</button>
     </div>
   );
 }
@@ -312,6 +479,7 @@ function CliMode({t, lang}){
         {text:'  lang <language>                   ' + t('cli.cmds.lang'), cls:'dim'},
         {text:'  clear                             ' + t('cli.cmds.clear'), cls:'dim'},
         {text:'  help                              ' + t('cli.cmds.help'), cls:'dim'},
+        {text:'  analyze [trending|topic <n>|repo <n>]  ' + (lang==='zh'?'AI 分析':'AI analysis'), cls:'dim'},
         {text:'',cls:''},
         {text:'  ' + t('cli.tip'), cls:'gray'},
         {text:'',cls:''},
@@ -435,6 +603,79 @@ function CliMode({t, lang}){
       return;
     }
 
+    if(cmd==='analyze'){
+      const sub = args[0];
+      if (sub === 'trending' || !sub) {
+        setLoading('analyze');
+        addLine(`  ${t('aiThinking')}...`,'dim');
+        try {
+          const r = await fetch(`${API}/trending?since=daily`);
+          if (!r.ok) throw new Error(r.statusText);
+          const repos = await r.json();
+          const ar = await fetch('/api/ai/trend-insights', {
+            method: 'POST', headers: {'Content-Type':'application/json'},
+            body: JSON.stringify({ repos }),
+          });
+          if (!ar.ok) throw new Error((await ar.json()).error || '');
+          const d = await ar.json();
+          setLoading(null);
+          addLine('','');
+          addLine('  ' + t('aiTrends'), 'green bold');
+          addLine('  ' + d.insights, 'cyan');
+          addLine('','');
+        } catch(e) {
+          setLoading(null);
+          addLine(`  ${t('aiError')}: ${e.message}`,'red');
+        }
+      } else if (sub === 'topic' && args[1]) {
+        const topic = args[1];
+        setLoading('analyze');
+        addLine(`  ${t('aiThinking')}...`,'dim');
+        try {
+          const r = await fetch(`${API}/topics/search?topic=${topic}&min=200`);
+          if (!r.ok) throw new Error(r.statusText);
+          const repos = await r.json();
+          const ar = await fetch('/api/ai/topic-summary', {
+            method: 'POST', headers: {'Content-Type':'application/json'},
+            body: JSON.stringify({ topic, repos }),
+          });
+          if (!ar.ok) throw new Error((await ar.json()).error || '');
+          const d = await ar.json();
+          setLoading(null);
+          addLine('','');
+          addLine(`  ${t('aiTopicSummary')}: ${topic}`, 'green bold');
+          addLine('  ' + d.summary, 'cyan');
+          addLine('','');
+        } catch(e) {
+          setLoading(null);
+          addLine(`  ${t('aiError')}: ${e.message}`,'red');
+        }
+      } else if (sub === 'repo' && args[1]) {
+        const fullName = args[1];
+        setLoading('analyze');
+        addLine(`  ${t('aiThinking')}...`,'dim');
+        try {
+          const ar = await fetch('/api/ai/summarize-repo', {
+            method: 'POST', headers: {'Content-Type':'application/json'},
+            body: JSON.stringify({ repo: { fullName, description: args.slice(2).join(' ') || '' } }),
+          });
+          if (!ar.ok) throw new Error((await ar.json()).error || '');
+          const d = await ar.json();
+          setLoading(null);
+          addLine('','');
+          addLine(`  ${t('aiRepoAnalysis')}: ${fullName}`, 'green bold');
+          addLine('  ' + d.summary, 'cyan');
+          addLine('','');
+        } catch(e) {
+          setLoading(null);
+          addLine(`  ${t('aiError')}: ${e.message}`,'red');
+        }
+      } else {
+        addLine(`  ${t('usage')}: analyze [trending|topic <name>|repo <owner/name>]`,'yellow');
+      }
+      return;
+    }
+
     addLine(`  ${t('unknown')}: ${cmd}`, 'red');
   },[t, lang]);
 
@@ -540,8 +781,9 @@ function TuiCard({r}){
 
 function TuiTopicsView({t}){
   const [data,setData]=useState(null);const [q,setQ]=useState('');const [l,setL]=useState(false);const [e,setE]=useState('');
-  const search=async()=>{if(!q)return;setL(true);setE('');try{const r=await fetch(`${API}/topics/search?topic=${q}&min=200`);if(!r.ok)throw new Error();setData(await r.json())}catch(x){setE(x.message)}finally{setL(false)}};
-  const batch=async()=>{setL(true);setE('');setQ('(batch)');try{const r=await fetch(`${API}/topics/batch`);if(!r.ok)throw new Error();const d=await r.json();setData(Object.entries(d).filter(([,v])=>v.length).map(([k,v])=>({topic:k,repos:v})))}catch(x){setE(x.message)}finally{setL(false)}};
+  const ai = useAi();
+  const search=async()=>{if(!q)return;setL(true);setE('');try{const r=await fetch(`${API}/topics/search?topic=${q}&min=200`);if(!r.ok){const e=await r.json().catch(()=>({}));throw new Error(e.error||r.statusText)}setData(await r.json())}catch(x){setE(x.message)}finally{setL(false)}};
+  const batch=async()=>{setL(true);setE('');setQ('(batch)');try{const r=await fetch(`${API}/topics/batch`);if(!r.ok){const e=await r.json().catch(()=>({}));throw new Error(e.error||r.statusText)}const d=await r.json();setData(Object.entries(d).filter(([,v])=>v.length).map(([k,v])=>({topic:k,repos:v})))}catch(x){setE(x.message)}finally{setL(false)}};
   return <><div className="tui-controls">
     <input value={q} onChange={e=>setQ(e.target.value)} placeholder="topic..." onKeyDown={e=>e.key==='Enter'&&search()}
       style={{background:'#000',border:'1px solid #ff79c630',color:'#f8f8f2',padding:'4px 8px',fontFamily:'inherit',fontSize:'10px',outline:'none',width:140}} />
@@ -557,15 +799,34 @@ function TuiTopicsView({t}){
         <a href={r.url} target="_blank">{r.fullName}</a><span>★{r.stars?.toLocaleString()}</span>
       </div>)}
     </div>)}</div>
-  :Array.isArray(data)?<div className="tui-grid">{data.map((r,i)=><TuiCard key={r.fullName||i} r={r}/>)}</div>
+  :Array.isArray(data)?<>
+    <div style={{display:'flex',gap:8,alignItems:'center',marginBottom:8}}>
+      <button className="tui-btn" onClick={()=>ai.topicSummary(q,data)} disabled={ai.busy}>{t('aiSummary')}</button>
+      {ai.busy&&<span style={{color:'#6272a4',fontSize:10}}>{t('aiThinking')}</span>}
+    </div>
+    {ai.result?.summary&&<div style={{border:'1px solid #ff79c630',padding:'8px 10px',marginBottom:8,fontSize:11,lineHeight:1.5,color:'#f8f8f2',background:'#ff79c608'}}>
+      <div style={{color:'#ff79c6',fontSize:9,textTransform:'uppercase',letterSpacing:1,marginBottom:4}}>{t('aiTopicSummary')}: {q}</div>
+      {ai.result.summary}</div>}
+    {ai.result?.error&&<div style={{color:'#ff5555',fontSize:10,marginBottom:8}}>⚠ {ai.result.error}</div>}
+    <div className="tui-grid">{data.map((r,i)=><TuiCard key={r.fullName||i} r={r}/>)}</div>
+  </>
   :null}</>;
 }
 
 function TuiReportView({t}){
   const [r,setR]=useState(null);
+  const ai = useAi();
   useEffect(()=>{fetch(`${API}/report`).then(r=>r.json()).then(setR).catch(()=>{})},[]);
   if(!r||r.message)return <div className="tui-loading"><div className="tui-spinner"></div>{r?.message||t('loading')}</div>;
   return <><div className="tui-stats"><span>{t('daysTracked')} <span>{r.trackedDays}{t('days')}</span></span><span>{t('uniqueRepos')} <span>{r.uniqueRepos}</span></span></div>
+  {r.topTrending?.length>0&&<div style={{display:'flex',gap:8,alignItems:'center',marginBottom:8}}>
+    <button className="tui-btn" onClick={async()=>{try{const d=await(await fetch(`${API}/trending?since=daily`)).json();ai.trendInsights(d)}catch(e){ai.setResult({error:e.message})}}} disabled={ai.busy}>{t('aiInsight')}</button>
+    {ai.busy&&<span style={{color:'#6272a4',fontSize:10}}>{t('aiThinking')}</span>}
+  </div>}
+  {ai.result?.insights&&<div style={{border:'1px solid #ff79c630',padding:'8px 10px',marginBottom:8,fontSize:11,lineHeight:1.5,color:'#f8f8f2',background:'#ff79c608'}}>
+    <div style={{color:'#ff79c6',fontSize:9,textTransform:'uppercase',letterSpacing:1,marginBottom:4}}>{t('aiTrends')}</div>
+    {ai.result.insights}</div>}
+  {ai.result?.error&&<div style={{color:'#ff5555',fontSize:10,marginBottom:8}}>⚠ {ai.result.error}</div>}
   <div className="tui-rg">{r.topTrending?.slice(0,12).map(r=><div key={r.fullName} className="tui-rc">
     <div className="nm"><a href={r.url} target="_blank">{r.fullName}</a></div>
     <div className="mt">{r.appearances}{t('days')} · ★{r.totalStarsLatest?.toLocaleString()} · {r.language||'—'}</div>
@@ -578,10 +839,11 @@ function TuiMode({t, lang}){
   const [data,setData]=useState(null);
   const [loading,setLoading]=useState(false);
   const [err,setErr]=useState('');
+  const ai = useAi();
 
   const fetchTrending=useCallback(async(s)=>{
     setLoading(true);setErr('');
-    try{const r=await fetch(`${API}/trending?since=${s}`);if(!r.ok)throw new Error();setData(await r.json())}
+    try{const r=await fetch(`${API}/trending?since=${s}`);if(!r.ok){const e=await r.json().catch(()=>({}));throw new Error(e.error||r.statusText)}setData(await r.json())}
     catch(x){setErr(x.message)}finally{setLoading(false)}
   },[]);
 
@@ -615,6 +877,14 @@ function TuiMode({t, lang}){
         :err?<div style={{color:'#ff5555',fontSize:11}}>{t('error')}: {err}</div>
         :data?.length?<div className="tui-grid">{data.map((r,i)=><TuiCard key={r.fullName||i} r={r}/>)}</div>
         :<div className="tui-loading">{t('noData')}</div>}
+      {!loading&&data?.length>0&&<div style={{display:'flex',gap:8,alignItems:'center',margin:'8px 0'}}>
+        <button className="tui-btn" onClick={()=>ai.trendInsights(data)} disabled={ai.busy}>{t('aiInsight')}</button>
+        {ai.busy&&<span style={{color:'#6272a4',fontSize:10}}>{t('aiThinking')}</span>}
+      </div>}
+      {ai.result?.insights&&<div style={{border:'1px solid #ff79c630',padding:'10px 12px',marginBottom:12,fontSize:11,lineHeight:1.6,color:'#f8f8f2',background:'#ff79c608'}}>
+        <div style={{color:'#ff79c6',fontSize:9,textTransform:'uppercase',letterSpacing:1,marginBottom:4}}>{t('aiTrends')}</div>
+        {ai.result.insights}</div>}
+      {ai.result?.error&&<div style={{color:'#ff5555',fontSize:10,marginBottom:8,padding:'6px 10px',border:'1px solid #ff555530'}}>⚠ {ai.result.error}</div>}
       </>}
       {view==='topics'&&<TuiTopicsView t={t} lang={lang}/>}
       {view==='report'&&<TuiReportView t={t} lang={lang}/>}
@@ -724,8 +994,9 @@ function ElCard({r}){
 
 function ElTopicsView({t}){
   const [data,setData]=useState(null);const [q,setQ]=useState('');const [l,setL]=useState(false);const [e,setE]=useState('');
-  const search=async()=>{if(!q)return;setL(true);setE('');try{const r=await fetch(`${API}/topics/search?topic=${q}&min=200`);if(!r.ok)throw new Error();setData(await r.json())}catch(x){setE(x.message)}finally{setL(false)}};
-  const batch=async()=>{setL(true);setE('');setQ('(batch)');try{const r=await fetch(`${API}/topics/batch`);if(!r.ok)throw new Error();const d=await r.json();setData(Object.entries(d).filter(([,v])=>v.length).map(([k,v])=>({topic:k,repos:v})))}catch(x){setE(x.message)}finally{setL(false)}};
+  const ai = useAi();
+  const search=async()=>{if(!q)return;setL(true);setE('');try{const r=await fetch(`${API}/topics/search?topic=${q}&min=200`);if(!r.ok){const e=await r.json().catch(()=>({}));throw new Error(e.error||r.statusText)}setData(await r.json())}catch(x){setE(x.message)}finally{setL(false)}};
+  const batch=async()=>{setL(true);setE('');setQ('(batch)');try{const r=await fetch(`${API}/topics/batch`);if(!r.ok){const e=await r.json().catch(()=>({}));throw new Error(e.error||r.statusText)}const d=await r.json();setData(Object.entries(d).filter(([,v])=>v.length).map(([k,v])=>({topic:k,repos:v})))}catch(x){setE(x.message)}finally{setL(false)}};
   return <><div className="el-controls">
     <input value={q} onChange={e=>setQ(e.target.value)} placeholder="topic..." onKeyDown={e=>e.key==='Enter'&&search()}
       style={{background:'rgba(255,255,255,.04)',border:'1px solid rgba(255,255,255,.08)',borderRadius:8,color:'#fff',padding:'6px 12px',fontSize:11,outline:'none',width:140}} />
@@ -741,12 +1012,25 @@ function ElTopicsView({t}){
         <a href={r.url} target="_blank">{r.fullName}</a><span>★{r.stars?.toLocaleString()}</span>
       </div>)}
     </div>)}</div>
-  :Array.isArray(data)?<div className="el-grid">{data.map((r,i)=><ElCard key={r.fullName||i} r={r}/>)}</div>
+  :Array.isArray(data)?<>
+    <div style={{display:'flex',gap:8,alignItems:'center',marginBottom:8}}>
+      <button onClick={()=>ai.topicSummary(q,data)} disabled={ai.busy}
+        style={{background:'linear-gradient(135deg,#7c3aed,#06b6d4)',border:'none',borderRadius:8,padding:'6px 14px',color:'#fff',cursor:'pointer',fontSize:11,fontWeight:500}}>
+        {t('aiSummary')}</button>
+      {ai.busy&&<span style={{color:'rgba(255,255,255,.3)',fontSize:10}}>{t('aiThinking')}</span>}
+    </div>
+    {ai.result?.summary&&<div style={{background:'rgba(255,255,255,.03)',border:'1px solid rgba(192,132,252,.2)',borderRadius:10,padding:'12px 16px',marginBottom:12,fontSize:11,lineHeight:1.6,color:'rgba(255,255,255,.8)'}}>
+      <div style={{fontFamily:'Outfit,sans-serif',fontWeight:600,fontSize:10,color:'#c084fc'}}>{t('aiTopicSummary')}: {q}</div>
+      {ai.result.summary}</div>}
+    {ai.result?.error&&<div style={{color:'#ef4444',fontSize:10}}>⚠ {ai.result.error}</div>}
+    <div className="el-grid">{data.map((r,i)=><ElCard key={r.fullName||i} r={r}/>)}</div>
+  </>
   :<div className="el-loading" style={{padding:30}}>{t('el.enterTopic')}</div>}</>;
 }
 
 function ElReportView({t}){
   const [r,setR]=useState(null);
+  const ai = useAi();
   useEffect(()=>{fetch(`${API}/report`).then(r=>r.json()).then(setR).catch(()=>{})},[]);
   if(!r||r.message)return <div className="el-loading"><div className="el-spinner"></div>{r?.message||t('el.loading')}</div>;
   return <><div className="el-stats">
@@ -754,6 +1038,16 @@ function ElReportView({t}){
     <div className="el-stat"><div className="el-stat-num">{r.uniqueRepos}</div><div className="el-stat-label">{t('uniqueRepos')}</div></div>
     <div className="el-stat"><div className="el-stat-num">{r.languageDistribution?.length||0}</div><div className="el-stat-label">{t('languages')}</div></div>
   </div>
+  {r.topTrending?.length>0&&<div style={{display:'flex',gap:8,alignItems:'center',marginBottom:8}}>
+    <button onClick={async()=>{try{const d=await(await fetch(`${API}/trending?since=daily`)).json();ai.trendInsights(d)}catch(e){ai.setResult({error:e.message})}}} disabled={ai.busy}
+      style={{background:'linear-gradient(135deg,#7c3aed,#06b6d4)',border:'none',borderRadius:8,padding:'6px 14px',color:'#fff',cursor:'pointer',fontSize:11,fontWeight:500}}>
+      {t('aiInsight')}</button>
+    {ai.busy&&<span style={{color:'rgba(255,255,255,.3)',fontSize:10}}>{t('aiThinking')}</span>}
+  </div>}
+  {ai.result?.insights&&<div style={{background:'rgba(255,255,255,.03)',border:'1px solid rgba(192,132,252,.2)',borderRadius:10,padding:'12px 16px',marginBottom:12,fontSize:11,lineHeight:1.6,color:'rgba(255,255,255,.8)'}}>
+    <div style={{fontFamily:'Outfit,sans-serif',fontWeight:600,fontSize:10,color:'#c084fc',textTransform:'uppercase',letterSpacing:1,marginBottom:4}}>{t('aiTrends')}</div>
+    {ai.result.insights}</div>}
+  {ai.result?.error&&<div style={{color:'#ef4444',fontSize:10}}>⚠ {ai.result.error}</div>}
   <div className="el-section-title">{t('topSustained')} <span>{r.topTrending?.length||0}</span></div>
   <div className="el-report-g">{r.topTrending?.slice(0,12).map(r=><div key={r.fullName} className="el-rc">
     <div className="nm"><a href={r.url} target="_blank">{r.fullName}</a></div>
@@ -767,10 +1061,11 @@ function ElMode({t, lang}){
   const [data,setData]=useState(null);
   const [loading,setLoading]=useState(false);
   const [err,setErr]=useState('');
+  const ai = useAi();
 
   const fetchTrending=useCallback(async(s)=>{
     setLoading(true);setErr('');
-    try{const r=await fetch(`${API}/trending?since=${s}`);if(!r.ok)throw new Error();setData(await r.json())}
+    try{const r=await fetch(`${API}/trending?since=${s}`);if(!r.ok){const e=await r.json().catch(()=>({}));throw new Error(e.error||r.statusText)}setData(await r.json())}
     catch(x){setErr(x.message)}finally{setLoading(false)}
   },[]);
 
@@ -816,6 +1111,16 @@ function ElMode({t, lang}){
           </div>
           <div className="el-section-title">{t('trending')} <span>{data?.length||0}</span></div>
           {data?.length?<div className="el-grid">{data.map((r,i)=><ElCard key={r.fullName||i} r={r}/>)}</div>:null}
+        {!loading&&data?.length>0&&<div style={{display:'flex',gap:8,alignItems:'center',marginTop:8,marginBottom:4}}>
+          <button onClick={()=>ai.trendInsights(data)} disabled={ai.busy}
+            style={{background:'linear-gradient(135deg,#7c3aed,#06b6d4)',border:'none',borderRadius:8,padding:'6px 14px',color:'#fff',cursor:'pointer',fontSize:11,fontWeight:500,opacity:ai.busy?.5:1}}>
+            {t('aiInsight')}</button>
+          {ai.busy&&<span style={{color:'rgba(255,255,255,.3)',fontSize:10}}>{t('aiThinking')}</span>}
+        </div>}
+        {ai.result?.insights&&<div style={{background:'rgba(255,255,255,.03)',border:'1px solid rgba(192,132,252,.2)',borderRadius:10,padding:'12px 16px',marginBottom:12,fontSize:11,lineHeight:1.6,color:'rgba(255,255,255,.8)'}}>
+          <div style={{fontFamily:'Outfit,sans-serif',fontWeight:600,fontSize:10,color:'#c084fc',textTransform:'uppercase',letterSpacing:1,marginBottom:4}}>{t('aiTrends')}</div>
+          {ai.result.insights}</div>}
+        {ai.result?.error&&<div style={{color:'#ef4444',fontSize:10}}>⚠ {ai.result.error}</div>}
         </>}
       </>}
       {view==='topics'&&<ElTopicsView t={t}/>}
@@ -835,6 +1140,7 @@ const appStyles = `
 function App(){
   const [mode,setMode]=useState(()=>localStorage.getItem('gt-mode')||'tui');
   const [animKey,setAnimKey]=useState(0);
+  const [showSettings,setShowSettings]=useState(false);
   const {t,lang,setLang}=useI18n();
 
   const switchMode=(m)=>{setMode(m);setAnimKey(k=>k+1);localStorage.setItem('gt-mode',m)};
@@ -851,7 +1157,8 @@ function App(){
   },[mode]);
 
   return <>
-    <ModeSwitcher mode={mode} onMode={switchMode} onRefresh={()=>{}} lang={lang} setLang={setLang}/>
+    <ModeSwitcher mode={mode} onMode={switchMode} onRefresh={()=>{}} lang={lang} setLang={setLang} onOpenSettings={()=>setShowSettings(true)}/>
+    {showSettings && <SettingsModal t={t} lang={lang} onClose={()=>setShowSettings(false)}/>}
     <div key={animKey} className="mode-enter">
       {mode==='cli'&&<CliMode t={t} lang={lang}/>}
       {mode==='tui'&&<TuiMode t={t} lang={lang}/>}
